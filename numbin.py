@@ -1,4 +1,5 @@
 import pandas as pd
+import pandas.core.algorithms as algos
 import numpy as np
 from scipy.stats import stats
 
@@ -7,13 +8,53 @@ from scipy.stats import stats
 #
 #
 
+def optimal_bins(notmiss_X, notmiss_Y, max_bins, min_bins):
+    """
+    Maximize Spearman correlation and find optimal number of bins.
+    Arguments:
+        notmiss_X: array or pd.DataFrame with not null values
+        notmiss_Y: array or pd.DataFrame with not null values
+        max_bins: int, maximum number of bins for split
+        min_bins: int, minimal number of bins for split
+    Returns:
+        n_optimal: optimal number of bins
+
+    """
+    r_corr_max = 0.0
+    r_corr = 0.0
+    n_bins = max_bins
+    n_optimal = max_bins
+    while n_bins >= min_bins:
+        df_bucket = pd.DataFrame({"X": notmiss_X,
+                                  "Y": notmiss_Y,
+                                  "Bucket": pd.qcut(notmiss_X, n_bins)})
+
+        # Grouping pairs (x, y) by "Bucket of x"
+        group_bucket = df_bucket.groupby('Bucket', as_index=True)
+
+        # Compute mean_X, mean_Y for each "Bucket"
+        mean_x_in_buckets = group_bucket.mean()['X']
+        mean_y_in_buckets = group_bucket.mean()['Y']
+
+        # Compute correlation between (mean_x, mean_y)
+        r_corr, p_val = stats.spearmanr(mean_x_in_buckets, mean_y_in_buckets)
+
+        # Update optimal parameters
+        if abs(r_corr) > abs(r_corr_max):
+            r_corr_max = r_corr
+            n_optimal = n_bins
+
+        n_bins -= 1
+    print('Correlation = {}, n_optimal = {}'.format(r_corr_max, n_optimal))
+    return n_optimal
+
+
 class NumericBinnner:
     """  Class of numeric binarizer. Preprocessor of numeric data. """
     def __init__(self, criteria='spearman'):
         self.criteria = criteria
 
-
-    def bin(self, X, Y, max_bin=20, min_bin=1):
+    def bin(self, X, Y, max_bins=20, min_bins=1):
         """
         Split array X on 'Buckets', and compute statistical features for each 'Bucket'
         Binarize X to groups.
@@ -32,28 +73,31 @@ class NumericBinnner:
         df_init = pd.DataFrame({"X": X, "Y": Y})
 
         # Split on notmiss and justmiss DataFrames
-        df_notmiss = df_init[['X','Y']][df_init["X"].notnull()]
+        df_notmiss = df_init[['X', 'Y']][df_init["X"].notnull()]
         df_justmiss = df_init[['X', 'Y']][df_init["X"].isnull()]
 
-        # Init correlation
-        r_corr = 0.0
-        n_bins = max_bin
+        # Compute optimal number of bins
+        n_optimal = optimal_bins(df_notmiss['X'], df_notmiss['Y'], max_bins, min_bins)
 
         # For each pair x, y -> find bucket
         df_bucket = pd.DataFrame({"X": df_notmiss['X'],
                                   "Y": df_notmiss['Y'],
-                                  "Bucket": pd.qcut(df_notmiss['X'], n_bins)})
+                                  "Bucket": pd.qcut(df_notmiss['X'], n_optimal)})
 
         # Grouping pairs (x, y) by "Bucket of x"
         group_bucket = df_bucket.groupby('Bucket', as_index=True)
 
-        # Compute mean_X, mean_Y for each "Bucket"
-        mean_x_in_buckets = group_bucket.mean()['X']
-        mean_y_in_buckets = group_bucket.mean()['Y']
-
-        # Compute correlation between (mean_x, mean_y)
-        r_corr, p_val = stats.spearmanr(mean_x_in_buckets, mean_y_in_buckets)
-        print('Correlation = {}, p_value = {}'.format(r_corr, p_val))
+        # Case of 1 bin
+        # If minimum number of bins
+        # if len(group_bucket) == 1:
+        #     n_bins = min_bins
+        #     bins = algos.quantile(df_notmiss['X'], np.linspace(0, 1, n_bins))
+        #     if len(np.unique(bins)) == 2:
+        #         bins = np.insert(bins, 0, 1)
+        #         bins[1] = bins[1] - (bins[1] / 2)
+        #     d1 = pd.DataFrame({"X": notmiss.X, "Y": notmiss.Y,
+        #                        "Bucket": pd.cut(notmiss.X, np.unique(bins), include_lowest=True)})
+        #     d2 = d1.groupby('Bucket', as_index=True)
 
         # Create DataFrame with statistical features of group_data by "Bucket"
         df_stat = pd.DataFrame({}, index=[])
@@ -95,5 +139,6 @@ X = np.arange(0, 100)
 Y = np.random.randint(0, 2, 100)
 
 print(binner.bin(X, Y))
+
 
 
