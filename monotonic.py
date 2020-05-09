@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+from scipy.stats import chi2
 
 def create_stats(group_data):
     """
@@ -101,6 +102,7 @@ def compute_p_values(monotonic_df):
     df_monoton = monotonic_df.copy()
 
     n = len(df_monoton)
+    p_values_all = []
     for i in range(n - 1):
         indx_top = i + 1
         indx_bot = i
@@ -116,6 +118,7 @@ def compute_p_values(monotonic_df):
 
         A = np.array([[bot_row['EVENT'], bot_row['NONEVENT']],
                       [top_row['EVENT'], top_row['NONEVENT']]])
+
         R = np.array([bot_row['COUNT'], top_row['COUNT']])
         C = np.array([np.sum(A[:, j], axis=0) for j in range(A.shape[1])])
         N = np.sum(A)
@@ -125,10 +128,27 @@ def compute_p_values(monotonic_df):
         # print('bot_row\n', bot_row)
         # print('A = ', A)
         # print('E = ', E)
-        chi_2 = np.sum(np.power((A - E), 2)/E)
+        chi_2_stat = np.sum(np.power((A - E), 2)/E)
+
+        # df = (N_columns - 1)(N_rows - 1)
+        deg_free = (A.shape[0] - 1)*(A.shape[1] - 1)
+        assert (deg_free == 1), 'Check degree'
+
+
+        p_value = chi2.cdf(chi_2_stat, df=deg_free)
+        if size < t:
+            p_value += 1
+        if rate < t_r:
+            p_value += 1
+
+        p_values_all.append((p_value, (indx_bot, indx_top)))
+
+
         print(chi_2, i)
         input()
 
+def find_max_pvalue():
+    pass
 
 class MonotoneOptBin:
     """  Class of numeric binarizer. Preprocessor of numeric data. """
@@ -169,15 +189,17 @@ class MonotoneOptBin:
         df_stat = create_stats(group_bucket)
 
         # Make df_stat Monotonic
-        # print('BEFORE MONOTONIC\n', df_stat)
+        print('BEFORE MONOTONIC\n', df_stat)
         df_monoton = make_monotonic(df_stat)
-        # print('MONOTONIC\n', df_monoton)
+        print('MONOTONIC\n', df_monoton)
 
         return df_monoton
 
-binner = MonotoneOptBin()
-X = np.arange(0, 100)
-Y = np.random.randint(0, 2, 100)
+# binner = MonotoneOptBin()
+# X = np.arange(0, 100)
+# Y = np.random.randint(0, 2, 100)
+#
+# df_monoton = binner.bin(X, Y)
+# # compute_p_values(df_monoton)
 
-df_monoton = binner.bin(X, Y)
-compute_p_values(df_monoton)
+print(chi2.cdf(6, df=1))
