@@ -48,8 +48,8 @@ def make_monotonic(statistical_data):
     bot_indx = top_indx - 1
 
     while bot_indx >= 0:
-        bot_row = df_monoton.iloc[bot_indx]
-        top_row = df_monoton.iloc[top_indx]
+        bot_row = df_monoton.iloc[bot_indx]  # row with smaller index
+        top_row = df_monoton.iloc[top_indx]  # row with higher index
 
         # If WOE of top_row larger -> merge to save monotonic
         if top_row['WOE'] > bot_row['WOE']:
@@ -87,6 +87,48 @@ def make_monotonic(statistical_data):
             bot_indx -= 1
 
     return df_monoton
+
+
+def compute_p_values(monotonic_df):
+    """
+    Computes p-value for each pair of bins.
+    Arguments:
+        monotonic_df: pd.DataFrame with statistical features,  WOE monotonously decreasing
+    Returns:
+
+
+    """
+    df_monoton = monotonic_df.copy()
+
+    n = len(df_monoton)
+    for i in range(n - 1):
+        indx_top = i + 1
+        indx_bot = i
+
+        top_row = df_monoton.iloc[indx_top]  # row with higher index
+        bot_row = df_monoton.iloc[indx_bot]  # row with smaller index
+
+        # A_ij - number of examples of class "j" in interval "i"
+        # R_i - number of examples in "i" interval
+        # C_j - number of examples of "j" class
+        # N - total number of examples
+        # E_ij - expected frequency of class "j" in interval "i"
+
+        A = np.array([[bot_row['EVENT'], bot_row['NONEVENT']],
+                      [top_row['EVENT'], top_row['NONEVENT']]])
+        R = np.array([bot_row['COUNT'], top_row['COUNT']])
+        C = np.array([np.sum(A[:, j], axis=0) for j in range(A.shape[1])])
+        N = np.sum(A)
+        E = np.array([[R[i]*C[j]/N for j in range(A.shape[1])] for i in range(A.shape[0])])
+
+        # print('top_row\n', top_row)
+        # print('bot_row\n', bot_row)
+        # print('A = ', A)
+        # print('E = ', E)
+        chi_2 = np.sum(np.power((A - E), 2)/E)
+        print(chi_2, i)
+        input()
+
 
 class MonotoneOptBin:
     """  Class of numeric binarizer. Preprocessor of numeric data. """
@@ -127,13 +169,15 @@ class MonotoneOptBin:
         df_stat = create_stats(group_bucket)
 
         # Make df_stat Monotonic
-        print('BEFORE MONOTONIC\n', df_stat)
+        # print('BEFORE MONOTONIC\n', df_stat)
         df_monoton = make_monotonic(df_stat)
-        print('MONOTONIC\n', df_monoton)
+        # print('MONOTONIC\n', df_monoton)
+
         return df_monoton
 
 binner = MonotoneOptBin()
 X = np.arange(0, 100)
 Y = np.random.randint(0, 2, 100)
 
-binner.bin(X, Y)
+df_monoton = binner.bin(X, Y)
+compute_p_values(df_monoton)
