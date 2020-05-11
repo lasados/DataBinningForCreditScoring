@@ -2,6 +2,8 @@ import pandas as pd
 import numpy as np
 from scipy.stats import chi2
 
+from sklearn.datasets import make_classification
+
 def create_stats(group_data):
     """
     Create DataFrame with statistical features of group_data by "Bucket.
@@ -73,8 +75,8 @@ def merge_rows(statistical_data, bottom_id, top_id):
     # Merge top_row to bot_row
     merged_row = bot_row.copy()
     merged_row['BUCKET'] = pd.Interval(left=left_bnd, right=right_bnd)
-    merged_row['MIN_VALUE'] = min(bot_row['MIN_VALUE'], top_row['MIN_VALUE'])
-    merged_row['MAX_VALUE'] = max(bot_row['MAX_VALUE'], top_row['MAX_VALUE'])
+    merged_row['MIN_VALUE'] = bot_row['MIN_VALUE']
+    merged_row['MAX_VALUE'] = top_row['MAX_VALUE']
     merged_row['COUNT'] = bot_row['COUNT'] + top_row['COUNT']
     merged_row['EVENT'] = bot_row['EVENT'] + top_row['EVENT']
     merged_row['EVENT_RATE'] = merged_row['EVENT'] / merged_row['COUNT']
@@ -109,6 +111,7 @@ def make_monotonic(statistical_data):
 
         # If WOE of top_row larger -> merge to save monotonic
         if top_row['WOE'] > bot_row['WOE']:
+            # Merging
             df_monoton = merge_rows(df_monoton, bot_indx, top_indx)
             # Reset top index
             top_indx = df_monoton.index[-1]
@@ -120,7 +123,7 @@ def make_monotonic(statistical_data):
     return df_monoton
 
 
-def compute_p_values(monotonic_df, min_size, min_rate):
+def compute_min_p_values(monotonic_df, min_size, min_rate):
     """
     Computes p-value for each pair of bins.
     Arguments:
@@ -128,7 +131,8 @@ def compute_p_values(monotonic_df, min_size, min_rate):
         min_size: int, threshold size of bins to merge
         min_rate: float, threshold of EVENT_RATE to merge bins
     Returns:
-        p_values: dictionary of p-values, key - bucket
+        min_p: minimum p-value between two bins from all buckets
+        buckets_min_p: index of two bins with max_p
     """
     df_monoton = monotonic_df.copy()
 
@@ -165,39 +169,20 @@ def compute_p_values(monotonic_df, min_size, min_rate):
 
         # Filtering by size
         if (bot_row['COUNT'] < min_size) or (top_row['COUNT'] < min_size):
-            p_val += 1
+            p_val -= 1
 
         # Filtering by rate
         if (bot_row['EVENT_RATE'] < min_rate) or (top_row['EVENT_RATE'] < min_rate):
-            p_val += 1
+            p_val -= 1
 
         # Add final p-value to dictionary
         p_values[(indx_bot, indx_top)] = p_val
 
-    return p_values
+    # Find max p_value in dict
+    buckets_min_p = min(p_values, key=p_values.get)  # index of rows with max p_value
+    min_p = min(p_values.values())
 
-
-def merge_bins_pval(monotonic_df, p_dict, min_p):
-    """
-    Merge two bins with max p-value.
-    Arguments:
-        monotonic_df: pd.DataFrame with statistical features,  WOE monotonously decreasing
-        p_dict: dictionary of p-values, key - bucket
-        min_p: float, minimum value to merge
-    Returns:
-        merged_df: pd.DataFrame
-    """
-    merged_df = monotonic_df.copy()
-    bucket_max_p = max(p_dict, key=p_dict.get)
-    max_p = max(p_dict.values())
-    print('max_pval', max_p, bucket_max_p)
-    if max_p > min_p:
-        indx_bot = bucket_max_p[0]
-        indx_top = bucket_max_p[1]
-        merged_df = merge_rows(merged_df, indx_bot, indx_top)
-        return tuple([True, merged_df])
-    else:
-        return tuple([False, merged_df])
+    return min_p, buckets_min_p
 
 
 def monotone_optimal_binning(X, Y, min_bin_size, min_bin_rate, min_p_val, max_bins):
@@ -222,15 +207,27 @@ def monotone_optimal_binning(X, Y, min_bin_size, min_bin_rate, min_p_val, max_bi
     df_monotonic = make_monotonic(df_stat)
 
     # Merging bins
-    merging = True
-    while merging:
-        p_values_dict = compute_p_values(df_monotonic, min_size=min_bin_size, min_rate=min_bin_rate)
-        merging, df_monotonic = merge_bins_pval(df_monotonic, p_values_dict, min_p=min_p_val)
+    while True:
+        min_p, buckets_min_p = compute_min_p_values(df_monotonic
+                                                    , min_size=min_bin_size
+                                                    , min_rate=min_bin_rate
+                                                    )
+        print('min_p = {}'.format(min_p))
+        if min_p < min_p_val:
+            indx_bot, indx_top = buckets_min_p
+            df_monotonic = merge_rows(df_monotonic, indx_bot, indx_top)
+        else:
+            break
+
         print(df_monotonic)
         input()
     return df_monotonic
 
-X = np.arange(0, 100)
-Y = np.random.randint(0, 2, 100)
+# X = np.arange(0, 100)
+# Y = np.random.randint(0, 2, 100)
+X, Y = make_classification(n_samples=100, n_features=6, random_state=42)
+
+X = X[:, 0]
 #
-print(monotone_optimal_binning(X, Y, 5, 0.1, 0.05, 20))
+# print(X, Y)
+print(monotone_optimal_binning(X, Y, 5, 0.1, 0.95, 20))
