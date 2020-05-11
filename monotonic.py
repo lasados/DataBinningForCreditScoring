@@ -5,7 +5,13 @@ from scipy.stats import chi2
 def create_stats(group_data):
     """
     Create DataFrame with statistical features of group_data by "Bucket.
-    group_data: pandas.GroupBy object, groups - Buckets
+    Arguments:
+        group_data: pandas.GroupBy object, groups - Buckets
+    Returns:
+        df_stat: pd.DataFrame with statistical features such as WOE, IV
+            columns = ['VAR_NAME', 'BUCKET", 'MIN_VALUE', 'MAX_VALUE', 'COUNT',
+                       'EVENT', 'EVENT_RATE', 'NONEVENT', 'NON_EVENT_RATE',
+                       'DIST_EVENT', 'DIST_NON_EVENT', 'WOE', 'IV']
     """
 
     df_stat = pd.DataFrame({}, index=[])
@@ -91,6 +97,8 @@ def merge_rows(statistical_data, bottom_id, top_id):
 
 
 def make_monotonic(statistical_data):
+    """ Make data monotonic by WOE."""
+
     df_monoton = statistical_data.copy()
     top_indx = df_monoton.index[-1]
     bot_indx = top_indx - 1
@@ -201,8 +209,6 @@ def monotone_optimal_binning(X, Y, min_bin_size, min_bin_rate, min_p_val, max_bi
     df_notmiss = df_init[['X', 'Y']][df_init["X"].notnull()]
     df_justmiss = df_init[['X', 'Y']][df_init["X"].isnull()]
 
-    # Compute optimal number of bins
-
     # For each pair x, y -> find bucket
     df_bucket = pd.DataFrame({"X": df_notmiss['X'],
                               "Y": df_notmiss['Y'],
@@ -214,6 +220,8 @@ def monotone_optimal_binning(X, Y, min_bin_size, min_bin_rate, min_p_val, max_bi
 
     # Make df_stat Monotonic
     df_monotonic = make_monotonic(df_stat)
+
+    # Merging bins
     merging = True
     while merging:
         p_values_dict = compute_p_values(df_monotonic, min_size=min_bin_size, min_rate=min_bin_rate)
@@ -222,56 +230,6 @@ def monotone_optimal_binning(X, Y, min_bin_size, min_bin_rate, min_p_val, max_bi
         input()
     return df_monotonic
 
-
-
-
-
-class MonotoneOptBin:
-    """  Class of numeric binarizer. Preprocessor of numeric data. """
-    def __init__(self, criteria='spearman'):
-        self.criteria = criteria
-
-    def bin(self, X, Y, max_bins=20, min_bins=1):
-        """
-        Split array X on 'Buckets', and compute statistical features for each 'Bucket'
-        Binarize X to groups.
-        Arguments:
-            X: data for binning, np.array
-            Y: target, np.array
-        Returns:
-            df_stat: pd.DataFrame with statistical features such as WOE, IV
-                columns = ['VAR_NAME', 'MIN_VALUE', 'MAX_VALUE', 'COUNT',
-                           'EVENT', 'EVENT_RATE', 'NONEVENT', 'NON_EVENT_RATE',
-                           'DIST_EVENT', 'DIST_NON_EVENT', 'WOE', 'IV']
-
-        """
-
-        # Transfer np.arrays to pd.DataFrame
-        df_init = pd.DataFrame({"X": X, "Y": Y})
-
-        # Split on notmiss and justmiss DataFrames
-        df_notmiss = df_init[['X', 'Y']][df_init["X"].notnull()]
-        df_justmiss = df_init[['X', 'Y']][df_init["X"].isnull()]
-
-        # Compute optimal number of bins
-
-        # For each pair x, y -> find bucket
-        df_bucket = pd.DataFrame({"X": df_notmiss['X'],
-                                  "Y": df_notmiss['Y'],
-                                  "Bucket": pd.qcut(df_notmiss['X'], max_bins)})
-
-        # Grouping pairs (x, y) by "Bucket of x"
-        group_bucket = df_bucket.groupby('Bucket', as_index=True)
-        df_stat = create_stats(group_bucket)
-
-        # Make df_stat Monotonic
-        print('BEFORE MONOTONIC\n', df_stat)
-        df_monoton = make_monotonic(df_stat)
-        print('MONOTONIC\n', df_monoton)
-
-        return df_monoton
-
-# binner = MonotoneOptBin()
 X = np.arange(0, 100)
 Y = np.random.randint(0, 2, 100)
 #
