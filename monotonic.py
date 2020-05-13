@@ -2,7 +2,6 @@ import pandas as pd
 import numpy as np
 from scipy.stats import chi2
 
-from sklearn.datasets import make_classification
 
 def create_stats(group_data):
     """
@@ -92,7 +91,6 @@ def merge_rows(statistical_data, bottom_id, top_id):
     merged_row["DIST_EVENT"] = merged_row['EVENT'] / df_merged.sum()['EVENT']
     merged_row["DIST_NON_EVENT"] = merged_row['NONEVENT'] / df_merged.sum()['NONEVENT']
     merged_row["WOE"] = np.log(merged_row['DIST_EVENT'] / merged_row['DIST_NON_EVENT'])
-    merged_row["IV"] = (merged_row['DIST_EVENT'] - merged_row['DIST_NON_EVENT']) * merged_row["WOE"]
 
     # Place to table
     df_merged.iloc[bot_indx] = merged_row
@@ -109,28 +107,55 @@ def merge_rows(statistical_data, bottom_id, top_id):
 
 
 def make_monotonic(statistical_data):
-    """ Make data monotonic by WOE."""
+    """
+    Make data monotonic by WOE choosing best direction of monotonicity.
+    Arguments:
+        statistical_data: pd.DataFrame with column 'WOE'
+    Returns:
+        best_df: pd.DataFrame, 'increase' or 'decrease' monotonic df with max number of bins
+    """
 
-    df_monoton = statistical_data.copy()
-    top_indx = df_monoton.index[-1]
-    bot_indx = top_indx - 1
+    df_up_down = {'increase': None, 'decrease': None}
+    for direction in ['increase', 'decrease']:
+        # Init data for current direction
+        df_monotonic = statistical_data.copy()
+        top_indx = df_monotonic.index[-1]
+        bot_indx = top_indx - 1
+        while bot_indx >= 0:
+            bot_row = df_monotonic.iloc[bot_indx]  # row with smaller index
+            top_row = df_monotonic.iloc[top_indx]  # row with higher index
+            if direction == 'increase':
+                # If WOE of top_row smaller -> merge to save increase monotonicity
+                comparison = top_row['WOE'] < bot_row['WOE']
+            else:
+                # If WOE of top_row larger -> merge to save decrease monotonicity
+                comparison = top_row['WOE'] < bot_row['WOE']
 
-    while bot_indx >= 0:
-        bot_row = df_monoton.iloc[bot_indx]  # row with smaller index
-        top_row = df_monoton.iloc[top_indx]  # row with higher index
+            if comparison:
+                # Merging
+                df_monotonic = merge_rows(df_monotonic, bot_indx, top_indx)
+                # Reset top index
+                top_indx = df_monotonic.index[-1]
+                bot_indx = top_indx - 1
+            else:
+                top_indx -= 1
+                bot_indx -= 1
 
-        # If WOE of top_row larger -> merge to save monotonic
-        if top_row['WOE'] > bot_row['WOE']:
-            # Merging
-            df_monoton = merge_rows(df_monoton, bot_indx, top_indx)
-            # Reset top index
-            top_indx = df_monoton.index[-1]
-            bot_indx = top_indx - 1
-        else:
-            top_indx -= 1
-            bot_indx -= 1
+        # Add current data_frame to collection
+        df_up_down[direction] = df_monotonic
 
-    return df_monoton
+    # Choose data_frame with bigger number of bins
+    n_bins_up = len(df_up_down['increase'])
+    n_bins_down = len(df_up_down['decrease'])
+    if n_bins_up >= n_bins_down:
+
+        best_direction = 'increase'
+    else:
+        best_direction = 'decrease'
+
+    print('Choosed ' + best_direction)
+    best_df = df_up_down[best_direction]
+    return best_df
 
 
 def compute_min_p_values(monotonic_df, min_size, min_rate):
@@ -144,7 +169,6 @@ def compute_min_p_values(monotonic_df, min_size, min_rate):
         min_p: minimum p-value between two bins from all buckets
         buckets_min_p: index of two bins with min_p
     """
-
 
     df_monoton = monotonic_df.copy()
     n = len(df_monoton)
@@ -240,17 +264,14 @@ def monotone_optimal_binning(X, Y,
     n_bins = len(df_monotonic)
     # Merging bins
     while n_bins > min_bins:
-        min_p, buckets_min_p = compute_min_p_values(df_monotonic
-                                                    , min_size=min_bin_size
-                                                    , min_rate=min_bin_rate
-                                                    )
+        min_p, buckets_min_p = compute_min_p_values(df_monotonic,
+                                                    min_size=min_bin_size,
+                                                    min_rate=min_bin_rate)
         print('Monotonic by WOE')
         print(df_monotonic)
         print('min_p = {}, indx_buckets = {}'.format(min_p, buckets_min_p))
         n_bins = len(df_monotonic)
-        print(n_bins, min_bins)
         input()
-
 
         if min_p < min_p_val:
             indx_bot, indx_top = buckets_min_p
@@ -267,11 +288,25 @@ def monotone_optimal_binning(X, Y,
     input()
     return df_monotonic
 
-# X = np.arange(0, 100)
-# Y = np.random.randint(0, 2, 100)
+
+def replace_feature_by_woe(X, Y):
+    df_optimal_binning = monotone_optimal_binning(X, Y)
+    X_woe = X.copy().astype(float)
+    for i_x, x in enumerate(X):
+        for i_b, bucket in enumerate(df_optimal_binning['BUCKET']):
+            if x in bucket:
+                X_woe[i_x] = df_optimal_binning['WOE'].iloc[i_b]
+                break
+
+    print('Init X \n', X)
+    print('Woe X \n', X_woe)
+    return X_woe
+
+
 data = pd.read_excel('data/bank.xlsx')
 
 X = data['balance'].values
 Y = (data['y'] == 'yes').astype(int).values
 
-monotone_optimal_binning(X, Y)
+# monotone_optimal_binning(X, Y)
+replace_feature_by_woe(X, Y)
