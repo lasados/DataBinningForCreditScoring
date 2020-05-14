@@ -106,11 +106,12 @@ def merge_rows(statistical_data, bottom_id, top_id):
     return df_merged
 
 
-def make_monotonic(statistical_data):
+def make_monotonic(statistical_data, criteria='IV'):
     """
     Make data monotonic by WOE choosing best direction of monotonicity.
     Arguments:
         statistical_data: pd.DataFrame with column 'WOE'
+        criteria: condition to choose best - number_of_bins -> 'bins', information_value -> 'IV"
     Returns:
         best_df: pd.DataFrame, 'increase' or 'decrease' monotonic df with max number of bins
     """
@@ -144,14 +145,22 @@ def make_monotonic(statistical_data):
         # Add current data_frame to collection
         df_up_down[direction] = df_monotonic
 
-    # Choose data_frame with bigger number of bins
-    n_bins_up = len(df_up_down['increase'])
-    n_bins_down = len(df_up_down['decrease'])
-    if n_bins_up >= n_bins_down:
-
-        best_direction = 'increase'
+    if criteria == 'bins':
+        # Choose data_frame with bigger number of bins
+        n_bins_up = len(df_up_down['increase'])
+        n_bins_down = len(df_up_down['decrease'])
+        if n_bins_up >= n_bins_down:
+            best_direction = 'increase'
+        else:
+            best_direction = 'decrease'
     else:
-        best_direction = 'decrease'
+        # Choose data_frame with bigger IV
+        IV_up = df_up_down['increase']['IV'][0]
+        IV_down = df_up_down['decrease']['IV'][0]
+        if IV_up >= IV_down:
+            best_direction = 'increase'
+        else:
+            best_direction = 'decrease'
 
     print('Choosed ' + best_direction)
     best_df = df_up_down[best_direction]
@@ -229,7 +238,7 @@ def monotone_optimal_binning(X, Y,
                              min_bin_size=0.05, min_bin_rate=0.01,
                              min_p_val=0.95, max_bins=20, min_bins=2):
     """
-    Algorithm of binning data.
+    Algorithm of monotone optimal binning data.
     Arguments:
         X: np.array, numeric feature
         Y: np.array, binary target
@@ -256,9 +265,9 @@ def monotone_optimal_binning(X, Y,
     group_bucket = df_bucket.groupby('Bucket', as_index=True)
     df_stat = create_stats(group_bucket)
 
-    print('Initial data frame')
-    print(df_stat)
-    input()
+    # print('Initial data frame')
+    # print(df_stat)
+    # input()
     # Make df_stat Monotonic
     df_monotonic = make_monotonic(df_stat)
     n_bins = len(df_monotonic)
@@ -267,29 +276,39 @@ def monotone_optimal_binning(X, Y,
         min_p, buckets_min_p = compute_min_p_values(df_monotonic,
                                                     min_size=min_bin_size,
                                                     min_rate=min_bin_rate)
-        print('Monotonic by WOE')
-        print(df_monotonic)
-        print('min_p = {}, indx_buckets = {}'.format(min_p, buckets_min_p))
-        n_bins = len(df_monotonic)
-        input()
+        # print('Monotonic by WOE')
+        # print(df_monotonic)
+        # print('min_p = {}, indx_buckets = {}'.format(min_p, buckets_min_p))
+        # input()
 
+        n_bins = len(df_monotonic)
         if min_p < min_p_val:
             indx_bot, indx_top = buckets_min_p
             df_monotonic = merge_rows(df_monotonic, indx_bot, indx_top)
         else:
             break
 
-        print('Merging')
-        print(df_monotonic)
-        input()
-
-    print('FINAL')
-    print(df_monotonic)
-    input()
+    #     print('Merging')
+    #     print(df_monotonic)
+    #     input()
+    #
+    # print('FINAL')
+    # print(df_monotonic)
+    # input()
     return df_monotonic
 
 
 def replace_feature_by_woe(X, Y):
+    """
+    Replace numeric feature on WOE by using algorithm of monotone optimal binning.
+    Arguments:
+        X: np.array, origin numeric feature
+        Y: binary target
+    Returns:
+        X_woe: np.array, WOE of X
+        info_value: Information Value of created binning.
+
+    """
     df_optimal_binning = monotone_optimal_binning(X, Y)
     X_woe = X.copy().astype(float)
     for i_x, x in enumerate(X):
@@ -297,16 +316,76 @@ def replace_feature_by_woe(X, Y):
             if x in bucket:
                 X_woe[i_x] = df_optimal_binning['WOE'].iloc[i_b]
                 break
+    # print('Init X \n', X)
+    # print('Woe X \n', X_woe)
+    info_value = df_optimal_binning['IV'][0]
+    return X_woe, info_value
 
-    print('Init X \n', X)
-    print('Woe X \n', X_woe)
-    return X_woe
+
+def create_woe_df_numeric(raw_data, numeric_columns):
+    """
+    Create data with WOE-features.
+    Args:
+        raw_data: pd.DataFrame, initial data
+        numeric_columns: list of strings, names of numeric features
+    Returns:
+        data_woe: pd.DataFrame
+        info_values: dictionary with Information Value of each feature.
+    """
+    data = raw_data.copy()
+    Y = (data['y'] == 'yes').astype(int).values
+    data_woe = pd.DataFrame()
+    data_woe['target'] = Y
+    info_values = dict()
+    for column in numeric_columns:
+        X = data[column].values
+        data_woe['WOE_' + column], info_values['WOE_' + column] = replace_feature_by_woe(X, Y)
+
+    return data_woe, info_values
 
 
+def delete_correlated_features(df_woe, iv_values, cut_off=0.05):
+    """
+    Drop columns with big correlation and small Information Value.
+    Args:
+        df_woe: pd.DataFrame
+        iv_values: dictionary with Information Value of each feature
+        cut_off: float, threshold to drop
+    Returns:
+        df_uncorr: pd.DataFrame without correlated features
+    """
+    corr_matrix = df_woe.drop(columns='target').corr().abs()
+    n_features = corr_matrix.shape[0]
+    to_drop = []
+    for i_row in range(n_features - 1):
+        for j_col in range(i_row + 1, n_features):
+            if corr_matrix.iloc[i_row, j_col] > cut_off:
+                row_feature = corr_matrix.index[i_row]
+                col_feature = corr_matrix.columns[j_col]
+
+                if (row_feature in to_drop) or (col_feature in to_drop):
+                    continue
+                else:
+                    row_IV = iv_values[row_feature]
+                    col_IV = iv_values[col_feature]
+                    if row_IV < col_IV:
+                        to_drop.append(row_feature)
+                    else:
+                        to_drop.append(col_feature)
+
+    print('Info_Values = ', iv_values)
+    print('Columns to drop = ', to_drop)
+    print(corr_matrix)
+    input()
+    df_uncorr = df_woe.drop(columns=to_drop)
+    return df_uncorr
+
+
+numeric_col = ['age', 'balance', 'day', 'duration', 'pdays']
 data = pd.read_excel('data/bank.xlsx')
 
-X = data['balance'].values
-Y = (data['y'] == 'yes').astype(int).values
+data_woe, info_values = create_woe_df_numeric(data, numeric_col)
+data_not_corr = delete_correlated_features(data_woe, info_values)
+print(data_not_corr)
 
-# monotone_optimal_binning(X, Y)
-replace_feature_by_woe(X, Y)
+
