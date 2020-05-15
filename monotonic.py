@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-from scipy.stats import chi2
+from scipy.stats import chi2, chi2_contingency
 
 
 def create_stats(group_data):
@@ -344,7 +344,7 @@ def create_woe_df_numeric(raw_data, numeric_columns):
     return data_woe, info_values
 
 
-def delete_correlated_features(df_woe, iv_values, cut_off=0.05):
+def delete_correlated_features(df_woe, iv_values, method='cramer', cut_off=0.05):
     """
     Drop columns with big correlation and small Information Value.
     Args:
@@ -354,24 +354,83 @@ def delete_correlated_features(df_woe, iv_values, cut_off=0.05):
     Returns:
         df_uncorr: pd.DataFrame without correlated features
     """
-    corr_matrix = df_woe.drop(columns='target').corr().abs()
-    n_features = corr_matrix.shape[0]
+    df_features_woe = df_woe.drop(columns='target')
+    n_features = df_features_woe.shape[1]
     to_drop = []
-    for i_row in range(n_features - 1):
-        for j_col in range(i_row + 1, n_features):
-            if corr_matrix.iloc[i_row, j_col] > cut_off:
-                row_feature = corr_matrix.index[i_row]
-                col_feature = corr_matrix.columns[j_col]
+    corr_matrix = pd.DataFrame(columns=df_features_woe.columns, index=df_features_woe.columns)
 
-                if (row_feature in to_drop) or (col_feature in to_drop):
-                    continue
-                else:
-                    row_IV = iv_values[row_feature]
-                    col_IV = iv_values[col_feature]
-                    if row_IV < col_IV:
-                        to_drop.append(row_feature)
+    # Compute continuous correlation
+    if method in ['pearson', 'spearman']:
+        # Compute correlation matrix
+        corr_matrix = df_features_woe.corr(method).abs()
+        for i_row in range(n_features - 1):
+            for j_col in range(i_row + 1, n_features):
+                # Correlation between feature i, j
+                corr_ij = corr_matrix.iloc[i_row, j_col]
+                # Deletion
+                if corr_ij > cut_off:
+                    feature_name_i = corr_matrix.index[i_row]
+                    feature_name_j = corr_matrix.columns[j_col]
+                    # Don't add feature to drop if already added
+                    if (feature_name_i in to_drop) or (feature_name_j in to_drop):
+                        continue
                     else:
-                        to_drop.append(col_feature)
+                        # Delete features with least Information Value
+                        i_IV = iv_values[feature_name_i]
+                        j_IV = iv_values[feature_name_j]
+                        if i_IV < j_IV:
+                            to_drop.append(feature_name_i)
+                        else:
+                            to_drop.append(feature_name_j)
+    else:
+        # Compute categorical correlation
+        assert method == 'cramer', 'Method does not exists'
+
+        # Compute correlation as Cramers Coefficient
+        for i in range(n_features):
+            for j in range(i + 1, n_features):
+                # Choose features
+                woe_i = df_features_woe.iloc[:, i].values
+                woe_j = df_features_woe.iloc[:, j].values
+                # Create categories
+                unique_woe_i = sorted(list(set(woe_i)))
+                unique_woe_j = sorted(list(set(woe_j)))
+                confusion_dict = {(w_i, w_j): 0 for w_i in unique_woe_i for w_j in unique_woe_j}
+
+                # Calculate confusion matrix
+                for w_i, w_j in zip(woe_i, woe_j):
+                    confusion_dict[(w_i, w_j)] += 1
+                confusion_matrix = pd.DataFrame(columns=unique_woe_i,
+                                                index=unique_woe_j)
+                for key in confusion_dict:
+                    column = key[0]
+                    row = key[1]
+                    confusion_matrix.loc[row, column] = confusion_dict[key]
+
+                # Calculate Cramers Coefficient
+                k1, k2 = confusion_matrix.shape
+                n = np.sum(confusion_matrix.values)
+                chi2_stat = chi2_contingency(confusion_matrix)[0]
+                phi_cram = np.sqrt(chi2_stat/(n*min(k1, k2) - 1))
+
+                # Add to correlation matrix
+                feature_name_i = df_features_woe.iloc[:, i].name
+                feature_name_j = df_features_woe.iloc[:, j].name
+                corr_matrix.loc[feature_name_i, feature_name_j] = phi_cram
+
+                # Deletion features
+                if phi_cram > cut_off:
+                    # Don't add feature to drop if already added
+                    if (feature_name_i in to_drop) or (feature_name_j in to_drop):
+                        continue
+                    else:
+                        # Delete features with least Information Value
+                        i_IV = iv_values[feature_name_i]
+                        j_IV = iv_values[feature_name_j]
+                        if i_IV < j_IV:
+                            to_drop.append(feature_name_i)
+                        else:
+                            to_drop.append(feature_name_j)
 
     print('Info_Values = ', iv_values)
     print('Columns to drop = ', to_drop)
