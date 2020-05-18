@@ -3,24 +3,49 @@ import numpy as np
 from scipy.stats import chi2, chi2_contingency
 
 
-def create_stats(group_data):
+def create_stats(X, Y, feature_type='numeric', max_bins=20):
     """
     Create DataFrame with statistical features of group_data by "Bucket.
     Arguments:
-        group_data: pandas.GroupBy object, groups - Buckets
+        X: np.array, feature
+        Y: np.array
+        feature_type: type 'numeric' or 'categorical'
+        max_bins: max number of bins for 'numeric' feature
     Returns:
         df_stat: pd.DataFrame with statistical features such as WOE, IV
             columns = ['VAR_NAME', 'BUCKET", 'MIN_VALUE', 'MAX_VALUE', 'COUNT',
                        'EVENT', 'EVENT_RATE', 'NONEVENT', 'NON_EVENT_RATE',
                        'DIST_EVENT', 'DIST_NON_EVENT', 'WOE', 'IV']
     """
+    df_init = pd.DataFrame({"X": X, "Y": Y})
+
+    # Split on notmiss and justmiss DataFrames
+    df_notmiss = df_init[['X', 'Y']][df_init["X"].notnull()]
+    df_justmiss = df_init[['X', 'Y']][df_init["X"].isnull()]
+
+    if feature_type == 'categorical':
+        # Bin - just a category
+        group_data = df_notmiss.groupby('X', as_index=True)
+    else:
+        # For each pair numeric x, y -> find bucket
+        df_bucket = pd.DataFrame({"X": df_notmiss['X'],
+                                  "Y": df_notmiss['Y'],
+                                  "Bucket": pd.qcut(df_notmiss['X'], max_bins, duplicates='drop')})
+
+        # Grouping pairs (x, y) by "Bucket of x"
+        group_data = df_bucket.groupby('Bucket', as_index=True)
 
     df_stat = pd.DataFrame({}, index=[])
+
     df_stat['BUCKET'] = group_data.groups.keys()
 
     # Compute min, max value of X for each "Bucket"
-    df_stat["MIN_VALUE"] = group_data.min()['X'].values
-    df_stat["MAX_VALUE"] = group_data.max()['X'].values
+    if feature_type == 'categorical':
+        df_stat["MIN_VALUE"] = group_data.groups.keys()
+        df_stat["MAX_VALUE"] = df_stat["MIN_VALUE"]
+    else:
+        df_stat["MIN_VALUE"] = group_data.min()['X'].values
+        df_stat["MAX_VALUE"] = group_data.max()['X'].values
 
     # Count number of points in "Bucket"
     df_stat["COUNT"] = group_data.count()['Y'].values
@@ -162,7 +187,7 @@ def make_monotonic(statistical_data, criteria='IV'):
         else:
             best_direction = 'decrease'
 
-    print('Choosed ' + best_direction)
+    #print('Choosed ' + best_direction)
     best_df = df_up_down[best_direction]
     return best_df
 
@@ -238,7 +263,7 @@ def monotone_optimal_binning(X, Y,
                              min_bin_size=0.05, min_bin_rate=0.01,
                              min_p_val=0.95, max_bins=20, min_bins=2):
     """
-    Algorithm of monotone optimal binning data.
+    Algorithm of monotone optimal binning data for numeric feature.
     Arguments:
         X: np.array, numeric feature
         Y: np.array, binary target
@@ -249,21 +274,8 @@ def monotone_optimal_binning(X, Y,
         min_bins: min number of bins
 
     """
-    # Transfer np.arrays to pd.DataFrame
-    df_init = pd.DataFrame({"X": X, "Y": Y})
 
-    # Split on notmiss and justmiss DataFrames
-    df_notmiss = df_init[['X', 'Y']][df_init["X"].notnull()]
-    df_justmiss = df_init[['X', 'Y']][df_init["X"].isnull()]
-
-    # For each pair x, y -> find bucket
-    df_bucket = pd.DataFrame({"X": df_notmiss['X'],
-                              "Y": df_notmiss['Y'],
-                              "Bucket": pd.qcut(df_notmiss['X'], max_bins, duplicates='drop')})
-
-    # Grouping pairs (x, y) by "Bucket of x"
-    group_bucket = df_bucket.groupby('Bucket', as_index=True)
-    df_stat = create_stats(group_bucket)
+    df_stat = create_stats(X, Y, 'numeric', max_bins)
 
     # print('Initial data frame')
     # print(df_stat)
@@ -322,6 +334,39 @@ def replace_feature_by_woe(X, Y):
     return X_woe, info_value
 
 
+def create_bins_df(raw_data):
+    """ Create data frame with stats of all features in input data."""
+    # Init data and target
+    data = raw_data.copy()
+    Y = (data['y'] == 'yes').astype(int).values
+    data.drop(columns='y', inplace=True)
+
+    # Init final df
+    df_bins = pd.DataFrame()
+
+    for column in data:
+        X = data[column].values
+        # Check type of feature
+        try:
+            # If numeric feature - use algorithm of optimal binning
+            X = X.astype('float32')
+            curr_stats_df = monotone_optimal_binning(X, Y)
+        except ValueError:
+            # If categorical feature - just compute stats
+            curr_stats_df = create_stats(X, Y, feature_type='categorical')
+
+        curr_stats_df['VAR_NAME'] = column
+
+        # Add to final df
+        df_bins = pd.concat([df_bins, curr_stats_df], ignore_index=True)
+
+    # Select inforamtion values from df
+    IV = pd.DataFrame({'IV': df_bins.groupby('VAR_NAME')['IV'].max()})
+    IV.reset_index(inplace=True)
+
+    return df_bins, IV
+
+
 def create_woe_df_numeric(raw_data, numeric_columns):
     """
     Create data with WOE-features.
@@ -350,6 +395,7 @@ def delete_correlated_features(df_woe, iv_values, method='cramer', cut_off=0.05)
     Args:
         df_woe: pd.DataFrame
         iv_values: dictionary with Information Value of each feature
+        method: method for computing correlation {'cramer', 'pearson', 'spearman'}
         cut_off: float, threshold to drop
     Returns:
         df_uncorr: pd.DataFrame without correlated features
@@ -443,8 +489,10 @@ def delete_correlated_features(df_woe, iv_values, method='cramer', cut_off=0.05)
 numeric_col = ['age', 'balance', 'day', 'duration', 'pdays']
 data = pd.read_excel('data/bank.xlsx')
 
-data_woe, info_values = create_woe_df_numeric(data, numeric_col)
-data_not_corr = delete_correlated_features(data_woe, info_values)
-print(data_not_corr)
+df_final, iv_final = create_bins_df(data)
+print(iv_final.sort_values('IV'))
+# data_woe, info_values = create_woe_df_numeric(data, numeric_col)
+# data_not_corr = delete_correlated_features(data_woe, info_values)
+# print(data_not_corr)
 
 
