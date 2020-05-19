@@ -2,6 +2,9 @@ import pandas as pd
 import numpy as np
 from scipy.stats import chi2, chi2_contingency
 
+# Raise error if division by zero occurs
+np.seterr(divide='raise')
+
 
 def create_stats(X, Y, feature_type='numeric', max_bins=20):
     """
@@ -52,17 +55,29 @@ def create_stats(X, Y, feature_type='numeric', max_bins=20):
     # Count number of positive and negative points in "Bucket
     df_stat["EVENT"] = group_data.sum()['Y'].values
     df_stat["NONEVENT"] = df_stat["COUNT"] - df_stat["EVENT"]
-    df_stat = df_stat.reset_index(drop=True)
 
-    df_stat["EVENT_RATE"] = df_stat['EVENT'] / df_stat['COUNT']
-    df_stat["NON_EVENT_RATE"] = df_stat['NONEVENT'] / df_stat['COUNT']
+    # Add statistics from missed
+    if df_justmiss.shape[0] > 0:
+        df_stat_miss = pd.DataFrame({'MIN_VALUE': np.nan}, index=[0])
+        df_stat_miss["BUCKET"] = np.nan
+        df_stat_miss["MAX_VALUE"] = np.nan
+        df_stat_miss["COUNT"] = df_justmiss.count()['Y']
+        df_stat_miss["EVENT"] = df_justmiss.sum()['Y']
+        df_stat_miss["NONEVENT"] = df_justmiss["COUNT"] - df_justmiss["EVENT"]
+        df_stat = df_stat.append(df_stat_miss, ignore_index=True)
+
+    # df_stat = df_stat.reset_index(drop=True)
+    epsilon = 1e-6
+    df_stat["EVENT_RATE"] = df_stat['EVENT'] / (df_stat['COUNT'] + epsilon)
+    df_stat["NON_EVENT_RATE"] = df_stat['NONEVENT'] / (df_stat['COUNT'] + epsilon)
 
     # Compute probabilities of EVENT and NONEVENT for each "Bucket"
-    df_stat["DIST_EVENT"] = df_stat['EVENT'] / df_stat.sum()['EVENT']
-    df_stat["DIST_NON_EVENT"] = df_stat['NONEVENT'] / df_stat.sum()['NONEVENT']
+    df_stat["DIST_EVENT"] = df_stat['EVENT'] / (df_stat.sum()['EVENT'] + epsilon)
+    df_stat["DIST_NON_EVENT"] = df_stat['NONEVENT'] / (df_stat.sum()['NONEVENT'] + epsilon)
 
     # Compute Weight Of Evidence and Information Value
-    df_stat["WOE"] = np.log(df_stat['DIST_EVENT'] / df_stat['DIST_NON_EVENT'])
+    df_stat["WOE"] = np.log((df_stat['DIST_EVENT'] + epsilon) /
+                            (df_stat['DIST_NON_EVENT'] + epsilon))
     df_stat["IV"] = (df_stat['DIST_EVENT'] - df_stat['DIST_NON_EVENT']) * df_stat["WOE"]
     df_stat["IV"] = df_stat["IV"].sum()
 
@@ -110,12 +125,14 @@ def merge_rows(statistical_data, bottom_id, top_id):
     merged_row['MAX_VALUE'] = top_row['MAX_VALUE']
     merged_row['COUNT'] = bot_row['COUNT'] + top_row['COUNT']
     merged_row['EVENT'] = bot_row['EVENT'] + top_row['EVENT']
-    merged_row['EVENT_RATE'] = merged_row['EVENT'] / merged_row['COUNT']
+    epsilon = 1e-6
+    merged_row['EVENT_RATE'] = merged_row['EVENT'] / (merged_row['COUNT'] + epsilon)
     merged_row['NONEVENT'] = bot_row['NONEVENT'] + top_row['NONEVENT']
-    merged_row['NON_EVENT_RATE'] = merged_row['NONEVENT'] / merged_row['NONEVENT']
-    merged_row["DIST_EVENT"] = merged_row['EVENT'] / df_merged.sum()['EVENT']
-    merged_row["DIST_NON_EVENT"] = merged_row['NONEVENT'] / df_merged.sum()['NONEVENT']
-    merged_row["WOE"] = np.log(merged_row['DIST_EVENT'] / merged_row['DIST_NON_EVENT'])
+    merged_row['NON_EVENT_RATE'] = merged_row['NONEVENT'] / (merged_row['NONEVENT'] + epsilon)
+    merged_row["DIST_EVENT"] = merged_row['EVENT'] / (df_merged.sum()['EVENT'] + epsilon)
+    merged_row["DIST_NON_EVENT"] = merged_row['NONEVENT'] / (df_merged.sum()['NONEVENT'] + epsilon)
+    merged_row["WOE"] = np.log((merged_row['DIST_EVENT'] + epsilon) /
+                               (merged_row['DIST_NON_EVENT'] + epsilon))
 
     # Place to table
     df_merged.iloc[bot_indx] = merged_row
@@ -187,7 +204,6 @@ def make_monotonic(statistical_data, criteria='IV'):
         else:
             best_direction = 'decrease'
 
-    #print('Choosed ' + best_direction)
     best_df = df_up_down[best_direction]
     return best_df
 
@@ -300,6 +316,12 @@ def monotone_optimal_binning(X, Y,
         else:
             break
 
+    # Open boundaries of first and last buckets
+    bucket_intervals = df_monotonic['BUCKET'].values
+    bucket_intervals[0] = pd.Interval(left=-1e9, right=bucket_intervals[0].right)
+    bucket_intervals[-1] = pd.Interval(left=bucket_intervals[-1].left, right=1e9)
+    df_monotonic['BUCKET'] = bucket_intervals
+
     #     print('Merging')
     #     print(df_monotonic)
     #     input()
@@ -310,12 +332,13 @@ def monotone_optimal_binning(X, Y,
     return df_monotonic
 
 
-def replace_feature_by_woe(X, Y):
+def replace_feature_by_woe(X, Y, fill_miss=0):
     """
     Replace numeric feature on WOE by using algorithm of monotone optimal binning.
     Arguments:
         X: np.array, origin numeric feature
         Y: binary target
+        fill_miss: value of WOE for missed feature (not in any bucket)
     Returns:
         X_woe: np.array, WOE of X
         info_value: Information Value of created binning.
@@ -324,18 +347,23 @@ def replace_feature_by_woe(X, Y):
     df_optimal_binning = monotone_optimal_binning(X, Y)
     X_woe = X.copy().astype(float)
     for i_x, x in enumerate(X):
+        is_replaced = False
         for i_b, bucket in enumerate(df_optimal_binning['BUCKET']):
             if x in bucket:
                 X_woe[i_x] = df_optimal_binning['WOE'].iloc[i_b]
+                is_replaced = True
                 break
-    # print('Init X \n', X)
-    # print('Woe X \n', X_woe)
+
+        if not is_replaced:
+            X_woe[i_x] = fill_miss
+
     info_value = df_optimal_binning['IV'][0]
     return X_woe, info_value
 
 
 def create_bins_df(raw_data):
     """ Create data frame with stats of all features in input data."""
+
     # Init data and target
     data = raw_data.copy()
     Y = (data['y'] == 'yes').astype(int).values
@@ -490,6 +518,7 @@ numeric_col = ['age', 'balance', 'day', 'duration', 'pdays']
 data = pd.read_excel('data/bank.xlsx')
 
 df_final, iv_final = create_bins_df(data)
+print(df_final)
 print(iv_final.sort_values('IV'))
 # data_woe, info_values = create_woe_df_numeric(data, numeric_col)
 # data_not_corr = delete_correlated_features(data_woe, info_values)
