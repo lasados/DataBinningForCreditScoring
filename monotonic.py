@@ -162,7 +162,12 @@ def make_monotonic(statistical_data, criteria='IV'):
     for direction in ['increase', 'decrease']:
         # Init data for current direction
         df_monotonic = statistical_data.copy()
+
+        # Find last index of Not NULL
         top_indx = df_monotonic.index[-1]
+        if df_monotonic.iloc[top_indx]['BUCKET'] == np.nan:
+            top_indx -= 1
+
         bot_indx = top_indx - 1
         while bot_indx >= 0:
             bot_row = df_monotonic.iloc[bot_indx]  # row with smaller index
@@ -388,9 +393,8 @@ def create_bins_df(raw_data):
         # Add to final df
         df_bins = pd.concat([df_bins, curr_stats_df], ignore_index=True)
 
-    # Select inforamtion values from df
-    IV = pd.DataFrame({'IV': df_bins.groupby('VAR_NAME')['IV'].max()})
-    IV.reset_index(inplace=True)
+    # Select information values from df
+    IV = pd.DataFrame({'IV': df_bins.groupby('VAR_NAME')['IV'].max()}).reset_index()
 
     return df_bins, IV
 
@@ -417,7 +421,7 @@ def create_woe_df_numeric(raw_data, numeric_columns):
     return data_woe, info_values
 
 
-def delete_correlated_features(df_woe, iv_values, method='cramer', cut_off=0.05):
+def delete_correlated_features(df_woe, iv_values, method='cramer', cut_off=0.05, inplace=True):
     """
     Drop columns with big correlation and small Information Value.
     Args:
@@ -425,6 +429,7 @@ def delete_correlated_features(df_woe, iv_values, method='cramer', cut_off=0.05)
         iv_values: dictionary with Information Value of each feature
         method: method for computing correlation {'cramer', 'pearson', 'spearman'}
         cut_off: float, threshold to drop
+        inplace: not compute correlation if feature dropped already
     Returns:
         df_uncorr: pd.DataFrame without correlated features
     """
@@ -439,23 +444,26 @@ def delete_correlated_features(df_woe, iv_values, method='cramer', cut_off=0.05)
         corr_matrix = df_features_woe.corr(method).abs()
         for i_row in range(n_features - 1):
             for j_col in range(i_row + 1, n_features):
+                # Skip if some feature already dropped
+                feature_name_i = corr_matrix.index[i_row]
+                feature_name_j = corr_matrix.columns[j_col]
+                if inplace:
+                    if feature_name_i in to_drop:
+                        break
+                    if feature_name_j in to_drop:
+                        continue
+
                 # Correlation between feature i, j
                 corr_ij = corr_matrix.iloc[i_row, j_col]
                 # Deletion
                 if corr_ij > cut_off:
-                    feature_name_i = corr_matrix.index[i_row]
-                    feature_name_j = corr_matrix.columns[j_col]
-                    # Don't add feature to drop if already added
-                    if (feature_name_i in to_drop) or (feature_name_j in to_drop):
-                        continue
+                    # Delete features with least Information Value
+                    i_IV = iv_values[feature_name_i]
+                    j_IV = iv_values[feature_name_j]
+                    if i_IV < j_IV:
+                        to_drop.append(feature_name_i)
                     else:
-                        # Delete features with least Information Value
-                        i_IV = iv_values[feature_name_i]
-                        j_IV = iv_values[feature_name_j]
-                        if i_IV < j_IV:
-                            to_drop.append(feature_name_i)
-                        else:
-                            to_drop.append(feature_name_j)
+                        to_drop.append(feature_name_j)
     else:
         # Compute categorical correlation
         assert method == 'cramer', 'Method does not exists'
@@ -463,24 +471,20 @@ def delete_correlated_features(df_woe, iv_values, method='cramer', cut_off=0.05)
         # Compute correlation as Cramers Coefficient
         for i in range(n_features):
             for j in range(i + 1, n_features):
-                # Choose features
+                # Skip if some feature already dropped
+                feature_name_i = df_features_woe.iloc[:, i].name
+                feature_name_j = df_features_woe.iloc[:, j].name
+                if inplace:
+                    if feature_name_i in to_drop:
+                        break
+                    if feature_name_j in to_drop:
+                        continue
+
                 woe_i = df_features_woe.iloc[:, i].values
                 woe_j = df_features_woe.iloc[:, j].values
-                # Create categories
-                unique_woe_i = sorted(list(set(woe_i)))
-                unique_woe_j = sorted(list(set(woe_j)))
-                confusion_dict = {(w_i, w_j): 0 for w_i in unique_woe_i for w_j in unique_woe_j}
 
                 # Calculate confusion matrix
-                for w_i, w_j in zip(woe_i, woe_j):
-                    confusion_dict[(w_i, w_j)] += 1
-                confusion_matrix = pd.DataFrame(columns=unique_woe_i,
-                                                index=unique_woe_j)
-                for key in confusion_dict:
-                    column = key[0]
-                    row = key[1]
-                    confusion_matrix.loc[row, column] = confusion_dict[key]
-
+                confusion_matrix = pd.crosstab(woe_i, woe_j)
                 # Calculate Cramers Coefficient
                 k1, k2 = confusion_matrix.shape
                 n = np.sum(confusion_matrix.values)
@@ -488,8 +492,6 @@ def delete_correlated_features(df_woe, iv_values, method='cramer', cut_off=0.05)
                 phi_cram = np.sqrt(chi2_stat/(n*min(k1, k2) - 1))
 
                 # Add to correlation matrix
-                feature_name_i = df_features_woe.iloc[:, i].name
-                feature_name_j = df_features_woe.iloc[:, j].name
                 corr_matrix.loc[feature_name_i, feature_name_j] = phi_cram
 
                 # Deletion features
@@ -514,14 +516,9 @@ def delete_correlated_features(df_woe, iv_values, method='cramer', cut_off=0.05)
     return df_uncorr
 
 
-numeric_col = ['age', 'balance', 'day', 'duration', 'pdays']
 data = pd.read_excel('data/bank.xlsx')
 
 df_final, iv_final = create_bins_df(data)
 print(df_final)
-print(iv_final.sort_values('IV'))
-# data_woe, info_values = create_woe_df_numeric(data, numeric_col)
-# data_not_corr = delete_correlated_features(data_woe, info_values)
-# print(data_not_corr)
-
+print(iv_final)
 
