@@ -6,6 +6,21 @@ from scipy.stats import chi2, chi2_contingency
 np.seterr(divide='raise')
 
 
+def is_numeric(X):
+    """Check is array contains numeric or categorical data."""
+    verdict = False
+    for x in X:
+        if x != x:
+            continue
+        else:
+            try:
+                float(x)
+                verdict = True
+            except ValueError:
+                verdict = False
+    return verdict
+
+
 def create_stats(X, Y, feature_type='numeric', max_bins=20):
     """
     Create DataFrame with statistical features of group_data by "Bucket.
@@ -58,15 +73,23 @@ def create_stats(X, Y, feature_type='numeric', max_bins=20):
 
     # Add statistics from missed
     if df_justmiss.shape[0] > 0:
-        df_stat_miss = pd.DataFrame({'MIN_VALUE': np.nan}, index=[0])
-        df_stat_miss["BUCKET"] = np.nan
+        df_stat_miss = pd.DataFrame({'BUCKET': np.nan}, index=[0])
+        df_stat_miss["MIN_VALUE"] = np.nan
         df_stat_miss["MAX_VALUE"] = np.nan
         df_stat_miss["COUNT"] = df_justmiss.count()['Y']
         df_stat_miss["EVENT"] = df_justmiss.sum()['Y']
-        df_stat_miss["NONEVENT"] = df_justmiss["COUNT"] - df_justmiss["EVENT"]
+        df_stat_miss["NONEVENT"] = df_stat_miss["COUNT"] - df_stat_miss["EVENT"]
         df_stat = df_stat.append(df_stat_miss, ignore_index=True)
+    else:
+        df_stat_miss = pd.DataFrame({'BUCKET': np.nan}, index=[0])
+        df_stat_miss["MIN_VALUE"] = np.nan
+        df_stat_miss["MAX_VALUE"] = np.nan
+        df_stat_miss["COUNT"] = 0
+        df_stat_miss["EVENT"] = 0
+        df_stat_miss["NONEVENT"] = 0
 
-    # df_stat = df_stat.reset_index(drop=True)
+    df_stat = df_stat.append(df_stat_miss, ignore_index=True)
+
     epsilon = 1e-6
     df_stat["EVENT_RATE"] = df_stat['EVENT'] / (df_stat['COUNT'] + epsilon)
     df_stat["NON_EVENT_RATE"] = df_stat['NONEVENT'] / (df_stat['COUNT'] + epsilon)
@@ -163,11 +186,13 @@ def make_monotonic(statistical_data, criteria='IV'):
         # Init data for current direction
         df_monotonic = statistical_data.copy()
 
-        # Find last index of Not NULL
         top_indx = df_monotonic.index[-1]
-        if df_monotonic.iloc[top_indx]['BUCKET'] == np.nan:
-            top_indx -= 1
+        # Find number of rows with nan
+        n_nan_rows = 0
+        if df_monotonic.iloc[top_indx]['BUCKET'] != df_monotonic.iloc[top_indx]['BUCKET']:
+            n_nan_rows = 1
 
+        top_indx -= n_nan_rows
         bot_indx = top_indx - 1
         while bot_indx >= 0:
             bot_row = df_monotonic.iloc[bot_indx]  # row with smaller index
@@ -183,7 +208,7 @@ def make_monotonic(statistical_data, criteria='IV'):
                 # Merging
                 df_monotonic = merge_rows(df_monotonic, bot_indx, top_indx)
                 # Reset top index
-                top_indx = df_monotonic.index[-1]
+                top_indx = df_monotonic.index[-1] - n_nan_rows
                 bot_indx = top_indx - 1
             else:
                 top_indx -= 1
@@ -226,11 +251,15 @@ def compute_min_p_values(monotonic_df, min_size, min_rate):
     """
 
     df_monoton = monotonic_df.copy()
-    n = len(df_monoton)
+    n_not_nan = len(df_monoton)
+    n_nan_rows = 0
+    if df_monoton.iloc[-1]['BUCKET'] != df_monoton.iloc[-1]['BUCKET']:
+        n_nan_rows = 1
 
+    n_not_nan -= n_nan_rows
     n_obs = df_monoton['COUNT'].sum()
     p_values = dict()
-    for i in range(n - 1):
+    for i in range(n_not_nan - 1):
         indx_top = i + 1
         indx_bot = i
         top_row = df_monoton.iloc[indx_top]  # row with higher index
@@ -274,7 +303,7 @@ def compute_min_p_values(monotonic_df, min_size, min_rate):
         p_values[(indx_bot, indx_top)] = p_val
 
     # Find minimum p_value in dict
-    buckets_min_p = min(p_values, key=p_values.get)  # index of rows with max p_value
+    buckets_min_p = min(p_values, key=p_values.get)  # index of rows with min p_value
     min_p = min(p_values.values())
 
     return min_p, buckets_min_p
@@ -282,7 +311,7 @@ def compute_min_p_values(monotonic_df, min_size, min_rate):
 
 def monotone_optimal_binning(X, Y,
                              min_bin_size=0.05, min_bin_rate=0.01,
-                             min_p_val=0.95, max_bins=20, min_bins=2):
+                             min_p_val=0.95, max_bins=20, min_bins=3):
     """
     Algorithm of monotone optimal binning data for numeric feature.
     Arguments:
@@ -298,9 +327,6 @@ def monotone_optimal_binning(X, Y,
 
     df_stat = create_stats(X, Y, 'numeric', max_bins)
 
-    # print('Initial data frame')
-    # print(df_stat)
-    # input()
     # Make df_stat Monotonic
     df_monotonic = make_monotonic(df_stat)
     n_bins = len(df_monotonic)
@@ -309,10 +335,6 @@ def monotone_optimal_binning(X, Y,
         min_p, buckets_min_p = compute_min_p_values(df_monotonic,
                                                     min_size=min_bin_size,
                                                     min_rate=min_bin_rate)
-        # print('Monotonic by WOE')
-        # print(df_monotonic)
-        # print('min_p = {}, indx_buckets = {}'.format(min_p, buckets_min_p))
-        # input()
 
         n_bins = len(df_monotonic)
         if min_p < min_p_val:
@@ -321,19 +343,17 @@ def monotone_optimal_binning(X, Y,
         else:
             break
 
-    # Open boundaries of first and last buckets
+    # Open boundaries of first and last not None buckets
     bucket_intervals = df_monotonic['BUCKET'].values
     bucket_intervals[0] = pd.Interval(left=-1e9, right=bucket_intervals[0].right)
-    bucket_intervals[-1] = pd.Interval(left=bucket_intervals[-1].left, right=1e9)
+    try:
+        bucket_intervals[-1] = pd.Interval(left=bucket_intervals[-1].left, right=1e9)
+    except AttributeError:
+        # if bucket in last row is Nan -> open boundaries in previous row
+        bucket_intervals[-2] = pd.Interval(left=bucket_intervals[-2].left, right=1e9)
+
     df_monotonic['BUCKET'] = bucket_intervals
 
-    #     print('Merging')
-    #     print(df_monotonic)
-    #     input()
-    #
-    # print('FINAL')
-    # print(df_monotonic)
-    # input()
     return df_monotonic
 
 
@@ -380,18 +400,18 @@ def create_bins_df(raw_data):
     for column in data:
         X = data[column].values
         # Check type of feature
-        try:
+        if is_numeric(X):
             # If numeric feature - use algorithm of optimal binning
             X = X.astype('float32')
             curr_stats_df = monotone_optimal_binning(X, Y)
-        except ValueError:
+        else:
             # If categorical feature - just compute stats
             curr_stats_df = create_stats(X, Y, feature_type='categorical')
 
         curr_stats_df['VAR_NAME'] = column
 
         # Add to final df
-        df_bins = pd.concat([df_bins, curr_stats_df], ignore_index=True)
+        df_bins = pd.concat([df_bins, curr_stats_df], ignore_index=True, sort=False)
 
     # Select information values from df
     IV = pd.DataFrame({'IV': df_bins.groupby('VAR_NAME')['IV'].max()}).reset_index()
