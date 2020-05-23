@@ -6,10 +6,23 @@ from scipy.stats import chi2, chi2_contingency
 np.seterr(divide='raise')
 
 
-def is_numeric(X):
+def binary_search(arr, left, right, x):
+    if right >= left:
+        mid = left + (right - left) // 2
+        if arr[mid] == x:
+            return mid
+        elif arr[mid] > x:
+            return binary_search(arr, left, mid - 1, x)
+        else:
+            return binary_search(arr, mid + 1, right, x)
+    else:
+        return left
+
+
+def is_numeric(array):
     """Check is array contains numeric or categorical data."""
     verdict = False
-    for x in X:
+    for x in array:
         if x != x:
             continue
         else:
@@ -79,7 +92,6 @@ def create_stats(X, Y, feature_type='numeric', max_bins=20):
         df_stat_miss["COUNT"] = df_justmiss.count()['Y']
         df_stat_miss["EVENT"] = df_justmiss.sum()['Y']
         df_stat_miss["NONEVENT"] = df_stat_miss["COUNT"] - df_stat_miss["EVENT"]
-        df_stat = df_stat.append(df_stat_miss, ignore_index=True)
     else:
         df_stat_miss = pd.DataFrame({'BUCKET': np.nan}, index=[0])
         df_stat_miss["MIN_VALUE"] = np.nan
@@ -357,35 +369,6 @@ def monotone_optimal_binning(X, Y,
     return df_monotonic
 
 
-def replace_feature_by_woe(X, Y, fill_miss=0):
-    """
-    Replace numeric feature on WOE by using algorithm of monotone optimal binning.
-    Arguments:
-        X: np.array, origin numeric feature
-        Y: binary target
-        fill_miss: value of WOE for missed feature (not in any bucket)
-    Returns:
-        X_woe: np.array, WOE of X
-        info_value: Information Value of created binning.
-
-    """
-    df_optimal_binning = monotone_optimal_binning(X, Y)
-    X_woe = X.copy().astype(float)
-    for i_x, x in enumerate(X):
-        is_replaced = False
-        for i_b, bucket in enumerate(df_optimal_binning['BUCKET']):
-            if x in bucket:
-                X_woe[i_x] = df_optimal_binning['WOE'].iloc[i_b]
-                is_replaced = True
-                break
-
-        if not is_replaced:
-            X_woe[i_x] = fill_miss
-
-    info_value = df_optimal_binning['IV'][0]
-    return X_woe, info_value
-
-
 def create_bins_df(raw_data):
     """ Create data frame with stats of all features in input data."""
 
@@ -395,7 +378,7 @@ def create_bins_df(raw_data):
     data.drop(columns='y', inplace=True)
 
     # Init final df
-    df_bins = pd.DataFrame()
+    full_stats_df = pd.DataFrame()
 
     for column in data:
         X = data[column].values
@@ -411,49 +394,117 @@ def create_bins_df(raw_data):
         curr_stats_df['VAR_NAME'] = column
 
         # Add to final df
-        df_bins = pd.concat([df_bins, curr_stats_df], ignore_index=True, sort=False)
+        full_stats_df = pd.concat([full_stats_df, curr_stats_df], ignore_index=True, sort=False)
 
     # Select information values from df
-    IV = pd.DataFrame({'IV': df_bins.groupby('VAR_NAME')['IV'].max()}).reset_index()
+    iv_df = pd.DataFrame({'IV': full_stats_df.groupby('VAR_NAME')['IV'].max()}).reset_index()
 
-    return df_bins, IV
+    return full_stats_df, iv_df
 
 
-def create_woe_df_numeric(raw_data, numeric_columns):
+def cut_off_iv(full_stats_df, iv_df, cut_off=0.01):
     """
-    Create data with WOE-features.
-    Args:
-        raw_data: pd.DataFrame, initial data
-        numeric_columns: list of strings, names of numeric features
+    Cut data with IV less than cut_off.
+    Arguments:
+        full_stats_df: pd.DataFrame with stats of all features
+        iv_df: pd.DataFrame with IV of all features
+        cut_off: threshold to cut
     Returns:
-        data_woe: pd.DataFrame
-        info_values: dictionary with Information Value of each feature.
+        cut_stats_df: final dataframe
+        not_use_names: not used VAR_NAME
     """
+
+    not_use_names = iv_df['VAR_NAME'][iv_df['IV'] < cut_off].values
+    use_name = iv_df['VAR_NAME'][iv_df['IV'] >= cut_off].values
+    use_idx = [name in use_name for name in full_stats_df['VAR_NAME']]
+    cut_stats_df = full_stats_df.iloc[use_idx]
+    return cut_stats_df, use_name
+
+# def replace_feature_by_woe_optimal(X, Y, fill_miss=0):
+#     if is_numeric(X):
+#         sorted_idx = np.argsort(X)
+#         X_sorted = X[sorted_idx]
+#         prev_idx_from_bucket = 0
+#         for bucket, bucket_woe in zip(df_optimal_binning['BUCKET'], df_optimal_binning['WOE']):
+#             right = bucket.right
+#             left = bucket.left
+#             last_idx_from_bucket = binary_search(X_sorted, right)
+#             curr_bucket_idx = sorted_idx[prev_idx_from_bucket: last_idx_from_bucket]
+#             X_woe[curr_bucket_idx] = bucket_woe
+#
+#     else:
+#         bucket_woe_dict = {bucket: bucket_woe in zip()}
+
+
+def replace_by_woe_naive(raw_data, cut_stats_df, use_name, fill_na=0.0):
+    """
+    Replace features on WOE.
+    Arguments:
+        raw_data: pd.DataFrame, origin features
+        cut_stats_df: full statistics reduced by IV
+        use_name: name of columns which are used
+        fill_na: value of WOE for missed feature (not in any bucket)
+    Returns:
+        data_with_woe: pd.DataFrame, features in WOE representation"""
+
     data = raw_data.copy()
-    Y = (data['y'] == 'yes').astype(int).values
-    data_woe = pd.DataFrame()
-    data_woe['target'] = Y
-    info_values = dict()
-    for column in numeric_columns:
+    data_with_woe = pd.DataFrame()
+    for column in use_name:
         X = data[column].values
-        data_woe['WOE_' + column], info_values['WOE_' + column] = replace_feature_by_woe(X, Y)
+        X_woe = np.empty_like(X, dtype=float)
 
-    return data_woe, info_values
+        # Choose df for current feature
+        current_stats_df = cut_stats_df[cut_stats_df['VAR_NAME'] == column].reset_index()
+        for i_x, x in enumerate(X):
+            # Start from check on NULL
+            if x != x:
+                X_woe[i_x] = current_stats_df['WOE'].iloc[-1]
+                continue
+
+            # Iteration across all buckets
+            is_replaced = False
+            for i_b, bucket in enumerate(current_stats_df['BUCKET'][:-1]):
+                if x in bucket:
+                    X_woe[i_x] = current_stats_df['WOE'].iloc[i_b]
+                    is_replaced = True
+                    break
+            if not is_replaced:
+                X_woe[i_x] = fill_na
+
+        data_with_woe['WOE_' + column] = X_woe
+
+    data_with_woe['target'] = (data['y'] == 'yes').astype(int).values
+
+    return data_with_woe
 
 
-def delete_correlated_features(df_woe, iv_values, method='cramer', cut_off=0.05, inplace=True):
+def delete_correlated_features(df_woe, iv_df,
+                               method='cramer',
+                               cut_off=0.05,
+                               inplace=True,
+                               sort_iv=True):
     """
     Drop columns with big correlation and small Information Value.
     Args:
         df_woe: pd.DataFrame
-        iv_values: dictionary with Information Value of each feature
+        iv_df: pd.DataFrame with Information Value of each feature
         method: method for computing correlation {'cramer', 'pearson', 'spearman'}
         cut_off: float, threshold to drop
         inplace: not compute correlation if feature dropped already
+        sort_iv: sort features by IV before delete correlations
     Returns:
         df_uncorr: pd.DataFrame without correlated features
     """
+
+    iv_values = {'WOE_' + var_name: iv for var_name, iv in zip(iv_df['VAR_NAME'], iv_df['IV'])}
     df_features_woe = df_woe.drop(columns='target')
+    # Sort by IV
+    if sort_iv:
+        sorted_columns = [(column, iv_values[column]) for column in df_features_woe.columns]
+        sorted_columns = sorted(sorted_columns, key=lambda x: x[1], reverse=True)
+        sorted_columns = [x[0] for x in sorted_columns]
+        df_features_woe = df_features_woe[sorted_columns]
+
     n_features = df_features_woe.shape[1]
     to_drop = []
     corr_matrix = pd.DataFrame(columns=df_features_woe.columns, index=df_features_woe.columns)
@@ -528,17 +579,19 @@ def delete_correlated_features(df_woe, iv_values, method='cramer', cut_off=0.05,
                         else:
                             to_drop.append(feature_name_j)
 
-    print('Info_Values = ', iv_values)
-    print('Columns to drop = ', to_drop)
-    print(corr_matrix)
-    input()
     df_uncorr = df_woe.drop(columns=to_drop)
-    return df_uncorr
+    return df_uncorr, corr_matrix, to_drop
 
 
-data = pd.read_excel('data/bank.xlsx')
+def start_pipeline(raw_data):
+    data = raw_data.copy()
+    full_stats, iv_values = create_bins_df(data)
+    full_stats_cut, use_name_iv = cut_off_iv(full_stats, iv_values)
+    data_woe = replace_by_woe_naive(data, full_stats_cut, use_name_iv)
+    df_woe_uncorr, corr_matrix, to_drop = delete_correlated_features(data_woe, iv_values,
+                                                                     inplace=True)
+    return df_woe_uncorr, corr_matrix, to_drop, iv_values
 
-df_final, iv_final = create_bins_df(data)
-print(df_final)
-print(iv_final)
 
+data = pd.read_excel('data/bank_null.xlsx')
+start_pipeline(data)
