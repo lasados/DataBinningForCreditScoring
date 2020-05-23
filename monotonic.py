@@ -28,10 +28,9 @@ def is_numeric(array):
         else:
             try:
                 float(x)
-                verdict = True
+                return True
             except ValueError:
-                verdict = False
-    return verdict
+                return False
 
 
 def create_stats(X, Y, feature_type='numeric', max_bins=20):
@@ -593,5 +592,3 @@ def start_pipeline(raw_data):
     return df_woe_uncorr, corr_matrix, to_drop, iv_values
 
 
-data = pd.read_excel('data/bank_null.xlsx')
-start_pipeline(data)
