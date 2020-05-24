@@ -1,22 +1,23 @@
 import pandas as pd
 import numpy as np
 from scipy.stats import chi2, chi2_contingency
+import time
 
 # Raise error if division by zero occurs
 np.seterr(divide='raise')
 
 
-def binary_search(arr, left, right, x):
-    if right >= left:
-        mid = left + (right - left) // 2
+def binary_search(arr, low, high, x):
+    if high >= low:
+        mid = low + (high - low) // 2
         if arr[mid] == x:
             return mid
         elif arr[mid] > x:
-            return binary_search(arr, left, mid - 1, x)
+            return binary_search(arr, low, mid - 1, x)
         else:
-            return binary_search(arr, mid + 1, right, x)
+            return binary_search(arr, mid + 1, high, x)
     else:
-        return left
+        return low
 
 
 def is_numeric(array):
@@ -419,23 +420,8 @@ def cut_off_iv(full_stats_df, iv_df, cut_off=0.01):
     cut_stats_df = full_stats_df.iloc[use_idx]
     return cut_stats_df, use_name
 
-# def replace_feature_by_woe_optimal(X, Y, fill_miss=0):
-#     if is_numeric(X):
-#         sorted_idx = np.argsort(X)
-#         X_sorted = X[sorted_idx]
-#         prev_idx_from_bucket = 0
-#         for bucket, bucket_woe in zip(df_optimal_binning['BUCKET'], df_optimal_binning['WOE']):
-#             right = bucket.right
-#             left = bucket.left
-#             last_idx_from_bucket = binary_search(X_sorted, right)
-#             curr_bucket_idx = sorted_idx[prev_idx_from_bucket: last_idx_from_bucket]
-#             X_woe[curr_bucket_idx] = bucket_woe
-#
-#     else:
-#         bucket_woe_dict = {bucket: bucket_woe in zip()}
 
-
-def replace_by_woe_naive(raw_data, cut_stats_df, use_name, fill_na=0.0):
+def replace_by_woe_optimal(raw_data, cut_stats_df, use_name, fill_na=-999999.0):
     """
     Replace features on WOE.
     Arguments:
@@ -444,16 +430,85 @@ def replace_by_woe_naive(raw_data, cut_stats_df, use_name, fill_na=0.0):
         use_name: name of columns which are used
         fill_na: value of WOE for missed feature (not in any bucket)
     Returns:
-        data_with_woe: pd.DataFrame, features in WOE representation"""
+        data_with_woe: pd.DataFrame, features in WOE representation
+    """
 
     data = raw_data.copy()
     data_with_woe = pd.DataFrame()
     for column in use_name:
         X = data[column].values
         X_woe = np.empty_like(X, dtype=float)
-
         # Choose df for current feature
-        current_stats_df = cut_stats_df[cut_stats_df['VAR_NAME'] == column].reset_index()
+        current_stats_df = cut_stats_df[cut_stats_df['VAR_NAME'] == column].reset_index(drop=True)
+        buckets = current_stats_df['BUCKET'].iloc[:-1]
+        woe_buckets = current_stats_df['WOE'].iloc[:-1]
+
+        bucket_nan = current_stats_df['BUCKET'].iloc[-1]
+        woe_bucket_nan = current_stats_df['WOE'].iloc[-1]
+
+        # Replace NaNs on WoE
+        mask_miss = pd.isnull(X)
+        X_woe[mask_miss] = woe_bucket_nan
+
+        # Choose not NaNs
+        X_true = X[np.invert(mask_miss)]
+        X_true_woe = np.empty_like(X_true, dtype=float)
+        if is_numeric(X_true):
+            # Sort values of feature
+            sorted_idx = np.argsort(X_true)
+            X_sorted = X_true[sorted_idx]
+
+            # Init last index of Sorted X that belongs to previous bucket
+            prev_idx_from_bucket = 0
+            for bucket, bucket_woe in zip(buckets, woe_buckets):
+                # Find last index in sorted X that belongs current bucket
+                right = bucket.right + 1e-6
+                last_idx_from_bucket = binary_search(X_sorted, low=0, high=len(X_sorted)-1, x=right)
+
+                # Find indexes of X that belongs current bucket and replace on WOE
+                curr_bucket_X_idx = sorted_idx[prev_idx_from_bucket: last_idx_from_bucket]
+                X_true_woe[curr_bucket_X_idx] = bucket_woe
+
+                # New last index of Sorted X that belongs to previous bucket
+                prev_idx_from_bucket = last_idx_from_bucket
+        else:
+            # Use dict for categories
+            bucket_woe_dict = {bucket: woe for bucket, woe in zip(buckets, woe_buckets)}
+            for i in range(len(X_true)):
+                category_i = X_true[i]
+
+                if category_i in bucket_woe_dict:
+                    X_true_woe[i] = bucket_woe_dict[category_i]
+                else:
+                    X_true_woe[i] = fill_na
+
+        # Add to final df
+        X_woe[np.invert(mask_miss)] = X_true_woe
+        data_with_woe['WOE_' + column] = X_woe
+
+    data_with_woe['target'] = (data['y'] == 'yes').astype(int).values
+    return data_with_woe
+
+
+def replace_by_woe_naive(raw_data, cut_stats_df, use_name, fill_na=-777777.0):
+    """
+    Replace features on WOE.
+    Arguments:
+        raw_data: pd.DataFrame, origin features
+        cut_stats_df: full statistics reduced by IV
+        use_name: name of columns which are used
+        fill_na: value of WOE for missed feature (not in any bucket)
+    Returns:
+        data_with_woe: pd.DataFrame, features in WOE representation
+    """
+
+    data = raw_data.copy()
+    data_with_woe = pd.DataFrame()
+    for column in use_name:
+        X = data[column].values
+        X_woe = np.empty_like(X, dtype=float)
+        # Choose df for current feature
+        current_stats_df = cut_stats_df[cut_stats_df['VAR_NAME'] == column].reset_index(drop=True)
         for i_x, x in enumerate(X):
             # Start from check on NULL
             if x != x:
@@ -469,6 +524,7 @@ def replace_by_woe_naive(raw_data, cut_stats_df, use_name, fill_na=0.0):
                     break
             if not is_replaced:
                 X_woe[i_x] = fill_na
+
 
         data_with_woe['WOE_' + column] = X_woe
 
@@ -584,11 +640,32 @@ def delete_correlated_features(df_woe, iv_df,
 
 def start_pipeline(raw_data):
     data = raw_data.copy()
+    t1 = time.time()
     full_stats, iv_values = create_bins_df(data)
+    t2 = time.time()
     full_stats_cut, use_name_iv = cut_off_iv(full_stats, iv_values)
-    data_woe = replace_by_woe_naive(data, full_stats_cut, use_name_iv)
-    df_woe_uncorr, corr_matrix, to_drop = delete_correlated_features(data_woe, iv_values,
+    t3 = time.time()
+    data_woe_naive = replace_by_woe_naive(data, full_stats_cut, use_name_iv)
+    t4 = time.time()
+    data_woe_opt = replace_by_woe_optimal(data, full_stats_cut, use_name_iv)
+
+    if data_woe_opt.equals(data_woe_naive):
+        print('Optimal and Naive Implementation of WOE replacing is EQUAL')
+    else:
+        print('ERROR.\n Optimal and Naive Implementation of WOE replacing is DIFFERENT')
+        print(data_woe_opt)
+        print(data_woe_naive)
+
+    t5 = time.time()
+    df_woe_uncorr, corr_matrix, to_drop = delete_correlated_features(data_woe_naive,
+                                                                     iv_values,
                                                                      inplace=True)
+    t6 = time.time()
+
+    print('Creating full stats = {} seconds'.format(round(t2 - t1, 3)))
+    print('Cutting of by IV = {} seconds'.format(round(t3 - t2, 3)))
+    print('Replace on WOE naive = {} microseconds'.format(round(t4 - t3, 3)))
+    print('Replace on WOE optimal = {} microseconds'.format(round(t5 - t4, 3)))
+    print('Delete correlations = {} seconds'.format(round(t6 - t5, 3)))
+
     return df_woe_uncorr, corr_matrix, to_drop, iv_values
-
-
