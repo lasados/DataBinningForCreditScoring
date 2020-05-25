@@ -402,7 +402,7 @@ def create_bins_df(raw_data):
     return full_stats_df, iv_df
 
 
-def cut_off_iv(full_stats_df, iv_df, cut_off=0.01):
+def cut_off_iv(full_stats_df, iv_df, cut_off=0.00):
     """
     Cut data with IV less than cut_off.
     Arguments:
@@ -410,7 +410,7 @@ def cut_off_iv(full_stats_df, iv_df, cut_off=0.01):
         iv_df: pd.DataFrame with IV of all features
         cut_off: threshold to cut
     Returns:
-        cut_stats_df: final dataframe
+        cut_stats_df: final data_frame
         not_use_names: not used VAR_NAME
     """
 
@@ -535,7 +535,7 @@ def replace_by_woe_naive(raw_data, cut_stats_df, use_name, fill_na=-777777.0):
 
 def delete_correlated_features(df_woe, iv_df,
                                method='cramer',
-                               cut_off=0.05,
+                               cut_off=0.75,
                                inplace=True,
                                sort_iv=True):
     """
@@ -638,34 +638,60 @@ def delete_correlated_features(df_woe, iv_df,
     return df_uncorr, corr_matrix, to_drop
 
 
-def start_pipeline(raw_data):
+def start_pipeline(raw_data, woe_replace='optimal'):
+    """
+    Prepossess data to binning representation.
+    Arguments:
+        raw_data: pd.DataFrame with numeric and categorical features.
+        woe_replace: implementation of algorithm {'optimal', 'naive', 'compare'}
+    Returns:
+        df_woe_uncorr: Data with WOE as features
+        corr_matrix: correlation matrix
+        to_drop: columns that dropped from data
+        iv_values: information values of features
+        full_stats: full statistics of binning
+        """
     data = raw_data.copy()
     t1 = time.time()
     full_stats, iv_values = create_bins_df(data)
     t2 = time.time()
     full_stats_cut, use_name_iv = cut_off_iv(full_stats, iv_values)
-    t3 = time.time()
-    data_woe_naive = replace_by_woe_naive(data, full_stats_cut, use_name_iv)
-    t4 = time.time()
-    data_woe_opt = replace_by_woe_optimal(data, full_stats_cut, use_name_iv)
 
-    if data_woe_opt.equals(data_woe_naive):
-        print('Optimal and Naive Implementation of WOE replacing is EQUAL')
+    if woe_replace == 'compare':
+        t3 = time.time()
+        data_woe_naive = replace_by_woe_naive(data, full_stats_cut, use_name_iv)
+        t4 = time.time()
+        data_woe_opt = replace_by_woe_optimal(data, full_stats_cut, use_name_iv)
+        t5 = time.time()
+        data_woe = data_woe_naive
+
+        print('Replace on WOE naive = {} seconds'.format(round(t4 - t3, 3)))
+        print('Replace on WOE optimal = {} seconds'.format(round(t5 - t4, 3)))
+        if data_woe_opt.equals(data_woe_naive):
+            print('Optimal and Naive Implementation of WOE replacing is EQUAL')
+        else:
+            print('ERROR.\n Optimal and Naive Implementation of WOE replacing is DIFFERENT')
+            print(data_woe_opt)
+            print(data_woe_naive)
+    elif woe_replace == 'optimal':
+        t3 = time.time()
+        data_woe = replace_by_woe_optimal(data, full_stats_cut, use_name_iv)
+        t4 = time.time()
+        print('Replace on WOE optimal = {} seconds'.format(round(t4 - t3, 3)))
     else:
-        print('ERROR.\n Optimal and Naive Implementation of WOE replacing is DIFFERENT')
-        print(data_woe_opt)
-        print(data_woe_naive)
+        t3 = time.time()
+        data_woe = replace_by_woe_naive(data, full_stats_cut, use_name_iv)
+        t4 = time.time()
+        print('Replace on WOE naive = {} seconds'.format(round(t4 - t3, 3)))
 
     t5 = time.time()
-    df_woe_uncorr, corr_matrix, to_drop = delete_correlated_features(data_woe_naive,
+    df_woe_uncorr, corr_matrix, to_drop = delete_correlated_features(data_woe,
                                                                      iv_values,
                                                                      inplace=True)
     t6 = time.time()
 
     print('Creating full stats = {} seconds'.format(round(t2 - t1, 3)))
     print('Cutting of by IV = {} seconds'.format(round(t3 - t2, 3)))
-    print('Replace on WOE naive = {} microseconds'.format(round(t4 - t3, 3)))
-    print('Replace on WOE optimal = {} microseconds'.format(round(t5 - t4, 3)))
     print('Delete correlations = {} seconds'.format(round(t6 - t5, 3)))
 
-    return df_woe_uncorr, corr_matrix, to_drop, iv_values
+    return df_woe_uncorr, corr_matrix, to_drop, iv_values, full_stats
