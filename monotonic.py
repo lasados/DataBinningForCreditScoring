@@ -670,7 +670,8 @@ def start_pipeline(raw_data, woe_replace='optimal'):
         corr_matrix: correlation matrix
         to_drop: columns that dropped from data
         iv_values: information values of features
-        full_stats: full statistics of binning
+        full_stats_cut: full statistics of binning cut by iv
+        use_name_iv: names of used features
         """
     data = raw_data.copy()
     t1 = time.time()
@@ -715,4 +716,4 @@ def start_pipeline(raw_data, woe_replace='optimal'):
     print('Cutting of by IV = {} seconds'.format(round(t3 - t2, 3)))
     print('Delete correlations = {} seconds'.format(round(t6 - t5, 3)))
 
-    return df_woe_uncorr, corr_matrix, to_drop, iv_values, full_stats
+    return df_woe_uncorr, corr_matrix, to_drop, iv_values, full_stats_cut, use_name_iv
