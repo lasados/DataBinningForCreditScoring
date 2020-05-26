@@ -479,7 +479,6 @@ def replace_by_woe_optimal(raw_data, cut_stats_df, use_name, fill_na=-999999.0):
             bucket_woe_dict = {bucket: woe for bucket, woe in zip(buckets, woe_buckets)}
             for i in range(len(X_true)):
                 category_i = X_true[i]
-
                 if category_i in bucket_woe_dict:
                     X_true_woe[i] = bucket_woe_dict[category_i]
                 else:
@@ -507,31 +506,51 @@ def replace_by_woe_naive(raw_data, cut_stats_df, use_name, fill_na=-777777.0):
 
     data = raw_data.copy()
     data_with_woe = pd.DataFrame()
+
     for column in use_name:
         X = data[column].values
         X_woe = np.empty_like(X, dtype=float)
         # Choose df for current feature
         current_stats_df = cut_stats_df[cut_stats_df['VAR_NAME'] == column].reset_index(drop=True)
-        for i_x, x in enumerate(X):
-            # Start from check on NULL
-            if x != x:
-                X_woe[i_x] = current_stats_df['WOE'].iloc[-1]
-                continue
+        buckets = current_stats_df['BUCKET'].iloc[:-1]
+        woe_buckets = current_stats_df['WOE'].iloc[:-1]
 
-            # Iteration across all buckets
-            is_replaced = False
-            for i_b, bucket in enumerate(current_stats_df['BUCKET'][:-1]):
-                if x in bucket:
-                    X_woe[i_x] = current_stats_df['WOE'].iloc[i_b]
-                    is_replaced = True
-                    break
-            if not is_replaced:
-                X_woe[i_x] = fill_na
+        bucket_nan = current_stats_df['BUCKET'].iloc[-1]
+        woe_bucket_nan = current_stats_df['WOE'].iloc[-1]
 
+        # Replace NaNs on WoE
+        mask_miss = pd.isnull(X)
+        X_woe[mask_miss] = woe_bucket_nan
+
+        # Choose not NaNs
+        X_true = X[np.invert(mask_miss)]
+        X_true_woe = np.empty_like(X_true, dtype=float)
+        if is_numeric(X_true):
+            for i, x in enumerate(X_true):
+                # Iteration across all buckets
+                is_replaced = False
+                for bucket, bucket_woe in zip(buckets, woe_buckets):
+                    if x in bucket:
+                        X_true_woe[i] = bucket_woe
+                        is_replaced = True
+                        break
+                if not is_replaced:
+                    X_true_woe[i] = fill_na
+        else:
+            # Use dict for categories
+            bucket_woe_dict = {bucket: woe for bucket, woe in zip(buckets, woe_buckets)}
+            for i in range(len(X_true)):
+                category_i = X_true[i]
+                if category_i in bucket_woe_dict:
+                    X_true_woe[i] = bucket_woe_dict[category_i]
+                else:
+                    X_true_woe[i] = fill_na
+
+        # Add to final df
+        X_woe[np.invert(mask_miss)] = X_true_woe
         data_with_woe['WOE_' + column] = X_woe
 
     data_with_woe['target'] = (data['y'] == 'yes').astype(int).values
-
     return data_with_woe
 
 
