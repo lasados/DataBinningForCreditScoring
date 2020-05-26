@@ -82,7 +82,7 @@ def create_stats(X, Y, feature_type='numeric', max_bins=20):
     df_stat["COUNT"] = group_data.count()['Y'].values
     # Count number of positive and negative points in "Bucket
     df_stat["EVENT"] = group_data.sum()['Y'].values
-    df_stat["NONEVENT"] = df_stat["COUNT"] - df_stat["EVENT"]
+    df_stat["NONEVENT"] = df_stat["COUNT"].values - df_stat["EVENT"].values
 
     # Add statistics from missed
     if df_justmiss.shape[0] > 0:
@@ -103,17 +103,18 @@ def create_stats(X, Y, feature_type='numeric', max_bins=20):
     df_stat = df_stat.append(df_stat_miss, ignore_index=True)
 
     epsilon = 1e-6
-    df_stat["EVENT_RATE"] = df_stat['EVENT'] / (df_stat['COUNT'] + epsilon)
-    df_stat["NON_EVENT_RATE"] = df_stat['NONEVENT'] / (df_stat['COUNT'] + epsilon)
+    df_stat["EVENT_RATE"] = df_stat['EVENT'].values / (df_stat['COUNT'].values + epsilon)
+    df_stat["NON_EVENT_RATE"] = df_stat['NONEVENT'].values / (df_stat['COUNT'].values + epsilon)
 
     # Compute probabilities of EVENT and NONEVENT for each "Bucket"
-    df_stat["DIST_EVENT"] = df_stat['EVENT'] / (df_stat.sum()['EVENT'] + epsilon)
-    df_stat["DIST_NON_EVENT"] = df_stat['NONEVENT'] / (df_stat.sum()['NONEVENT'] + epsilon)
+    df_stat["DIST_EVENT"] = df_stat['EVENT'].values / (df_stat.sum()['EVENT'] + epsilon)
+    df_stat["DIST_NON_EVENT"] = df_stat['NONEVENT'].values / (df_stat.sum()['NONEVENT'] + epsilon)
 
     # Compute Weight Of Evidence and Information Value
-    df_stat["WOE"] = np.log((df_stat['DIST_EVENT'] + epsilon) /
-                            (df_stat['DIST_NON_EVENT'] + epsilon))
-    df_stat["IV"] = (df_stat['DIST_EVENT'] - df_stat['DIST_NON_EVENT']) * df_stat["WOE"]
+    df_stat["WOE"] = np.log((df_stat['DIST_NON_EVENT'].values + epsilon) /
+                            (df_stat['DIST_EVENT'].values + epsilon))
+    df_stat["IV"] = ((df_stat['DIST_NON_EVENT'].values - df_stat['DIST_EVENT'].values)
+                     * df_stat["WOE"].values)
     df_stat["IV"] = df_stat["IV"].sum()
 
     # Set order of columns
@@ -156,18 +157,20 @@ def merge_rows(statistical_data, bottom_id, top_id):
     # Merge top_row to bot_row
     merged_row = bot_row.copy()
     merged_row['BUCKET'] = pd.Interval(left=left_bnd, right=right_bnd)
-    merged_row['MIN_VALUE'] = bot_row['MIN_VALUE']
-    merged_row['MAX_VALUE'] = top_row['MAX_VALUE']
-    merged_row['COUNT'] = bot_row['COUNT'] + top_row['COUNT']
-    merged_row['EVENT'] = bot_row['EVENT'] + top_row['EVENT']
+    merged_row['MIN_VALUE'] = float(bot_row['MIN_VALUE'])
+    merged_row['MAX_VALUE'] = float(top_row['MAX_VALUE'])
+    merged_row['COUNT'] = float(bot_row['COUNT']) + float(top_row['COUNT'])
+    merged_row['EVENT'] = float(bot_row['EVENT']) + float(top_row['EVENT'])
     epsilon = 1e-6
-    merged_row['EVENT_RATE'] = merged_row['EVENT'] / (merged_row['COUNT'] + epsilon)
-    merged_row['NONEVENT'] = bot_row['NONEVENT'] + top_row['NONEVENT']
-    merged_row['NON_EVENT_RATE'] = merged_row['NONEVENT'] / (merged_row['NONEVENT'] + epsilon)
-    merged_row["DIST_EVENT"] = merged_row['EVENT'] / (df_merged.sum()['EVENT'] + epsilon)
-    merged_row["DIST_NON_EVENT"] = merged_row['NONEVENT'] / (df_merged.sum()['NONEVENT'] + epsilon)
-    merged_row["WOE"] = np.log((merged_row['DIST_EVENT'] + epsilon) /
-                               (merged_row['DIST_NON_EVENT'] + epsilon))
+    merged_row['EVENT_RATE'] = float(merged_row['EVENT']) / (float(merged_row['COUNT']) + epsilon)
+    merged_row['NONEVENT'] = float(bot_row['NONEVENT']) + float(top_row['NONEVENT'])
+    merged_row['NON_EVENT_RATE'] = (float(merged_row['NONEVENT'])
+                                    / (float(merged_row['COUNT']) + epsilon))
+    merged_row["DIST_EVENT"] = float(merged_row['EVENT']) / (df_merged.sum()['EVENT'] + epsilon)
+    merged_row["DIST_NON_EVENT"] = (float(merged_row['NONEVENT'])
+                                    / (df_merged.sum()['NONEVENT'] + epsilon))
+    merged_row["WOE"] = np.log((float(merged_row['DIST_NON_EVENT']) + epsilon) /
+                               (float(merged_row['DIST_EVENT']) + epsilon))
 
     # Place to table
     df_merged.iloc[bot_indx] = merged_row
@@ -177,7 +180,7 @@ def merge_rows(statistical_data, bottom_id, top_id):
     df_merged.reset_index(inplace=True, drop=True)
 
     # Recalculate Information Value
-    df_merged["IV"] = (df_merged['DIST_EVENT'] - df_merged['DIST_NON_EVENT']) * df_merged["WOE"]
+    df_merged["IV"] = (df_merged['DIST_NON_EVENT'] - df_merged['DIST_EVENT']) * df_merged["WOE"]
     df_merged["IV"] = df_merged["IV"].sum()
 
     return df_merged
@@ -524,7 +527,6 @@ def replace_by_woe_naive(raw_data, cut_stats_df, use_name, fill_na=-777777.0):
                     break
             if not is_replaced:
                 X_woe[i_x] = fill_na
-
 
         data_with_woe['WOE_' + column] = X_woe
 
