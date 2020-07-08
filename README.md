@@ -8,26 +8,8 @@ Useful resources :
 [article about WOE and IV](https://medium.com/@sundarstyles89/weight-of-evidence-and-information-value-using-python-6f05072e83eb)
 
 ## Installation
-Clone repository in folder on your system.
-```bash
-git clone https://github.com/lasados/Data-Binning-for-credit-scoring.git
-```
-Open repository.
+The algorithm is added to the gitignore file. Installation is not available
 
-Install requirements with pip.
-```bash
-pip install -r pip-requirements.txt
-```
-
-## Usage
-```python
-from models.monotonic import *
-
-data_train = pd.read_csv('your_data.csv')
-# name_target_column = 'y'
-
-df_woe_train, corr_matrix, to_drop, iv_values, full_cut_stats, use_name_iv = start_pipeline(data_train, 'compare')
-```
 
 See full pipeline in [notebooks/pipeline.ipynb](https://github.com/lasados/Data-Binning-for-credit-scoring/blob/master/notebooks/pipeline.ipynb)
 
