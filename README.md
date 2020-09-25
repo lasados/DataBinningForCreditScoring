@@ -8,9 +8,13 @@ Useful resources :
 [article about WOE and IV](https://medium.com/@sundarstyles89/weight-of-evidence-and-information-value-using-python-6f05072e83eb)
 
 ## Installation
-The algorithm is added to the gitignore file. Installation is not available
-
+Usage example - [notebooks/model.ipynb](https://github.com/lasados/Data-Binning-for-credit-scoring/blob/master/notebooks/model.ipynb)
 
 See full pipeline in [notebooks/pipeline.ipynb](https://github.com/lasados/Data-Binning-for-credit-scoring/blob/master/notebooks/pipeline.ipynb)
 
-Usage example - [notebooks/model.ipynb](https://github.com/lasados/Data-Binning-for-credit-scoring/blob/master/notebooks/model.ipynb)
+The algorithm is added to the gitignore file. Installation is not available
+
+
+
+
+
